@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>그룹웨어 버튼 좌표/기능 카탈로그 뷰어</title>
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <h1>메뉴 목록</h1>
+      <ul id="menu-list"></ul>
+    </aside>
+    <main id="main">
+      <div id="stage-wrap">
+        <div id="stage">
+          <img id="screenshot" alt="스크린샷">
+          <div id="boxes"></div>
+        </div>
+      </div>
+      <div id="detail">
+        <p id="detail-placeholder">버튼 박스를 클릭하면 상세 정보가 여기 표시됩니다.</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="../output/catalog/_bundle.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>
