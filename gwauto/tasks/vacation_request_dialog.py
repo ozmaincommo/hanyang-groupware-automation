@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from gwauto import form_actions
-from gwauto.ui_widgets import PersistentDateEntry as DateEntry
+from gwauto.ui_widgets import PersistentDateEntry as DateEntry, center_over_parent
 
 # 그룹웨어 실제 달력(일~토, 2026.08.10 형식)과 동일하게 맞춘다.
 _DATE_ENTRY_KW = {"date_pattern": "yyyy.mm.dd", "firstweekday": "sunday", "width": 10}
@@ -232,5 +232,6 @@ def ask_params(parent: tk.Misc) -> dict | None:
     dlg.protocol("WM_DELETE_WINDOW", on_cancel)
     naeyong_entry.focus_set()
 
+    center_over_parent(dlg, parent)
     parent.wait_window(dlg)
     return result

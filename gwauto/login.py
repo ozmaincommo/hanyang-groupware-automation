@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 
-from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import Page
 
 PORTAL_URL = "https://portal.hanyang.ac.kr/sso/lgin.do"
 LOGIN_ID_SELECTOR = "input[name=userId]"
@@ -30,11 +30,12 @@ LOGGED_IN_MARKER_TEXT = "로그아웃"
 
 
 def goto_login(page: Page) -> None:
+    # networkidle까지 기다리면 3~5초가 추가로 걸리는데(2026-08-05 실측), ID/PW 필드는
+    # domcontentloaded 시점에 이미 상호작용 가능한 상태다(같은 실측으로 확인). OTP는
+    # 30초마다 회전하는 값이라 이 대기 시간 자체가 "제출 시점에 이미 틀린 코드가 되는"
+    # 위험을 키우므로, 필요 없는 이 대기를 제거해 로그인 화면 진입 시간을 단축한다.
+    # page.fill()/click() 자체가 요소의 준비 상태를 알아서 기다려주므로 안전하다.
     page.goto(PORTAL_URL, wait_until="domcontentloaded", timeout=30000)
-    try:
-        page.wait_for_load_state("networkidle", timeout=20000)
-    except PlaywrightTimeoutError:
-        pass
 
 
 def is_logged_in(page: Page) -> bool:
@@ -54,13 +55,28 @@ def fill_credentials(page: Page, user_id: str, password: str) -> None:
     page.keyboard.press("Enter")
 
 
-def wait_until_logged_in(page: Page, timeout_s: int = 600, poll_ms: int = 1000) -> bool:
+def wait_until_logged_in(
+    page: Page, timeout_s: int = 600, poll_ms: int = 300, otp_code: str | None = None
+) -> bool:
     """로그인 폼(및 뒤이은 구글 OTP 입력)이 화면에서 사라질 때까지 대기한다.
-    OTP는 사용자가 직접 입력해야 하므로 이 함수는 그저 완료를 감지만 한다."""
+    otp_code가 주어지면 OTP 화면이 뜨는 순간 한 번만 자동 입력을 시도한다(otp.py) —
+    실패해도 재시도하지 않고 예외를 그대로 위로 던져(호출 측이 실패 사유를 그대로
+    보고하도록) 사용자가 뜬 Chrome 창에서 직접 정정 입력할 수 있게 남겨둔다.
+    otp_code가 없으면 기존처럼 사용자가 직접 입력할 때까지 대기만 한다.
+
+    poll_ms 기본값을 300ms로 낮췄다(기존 1000ms) — OTP는 30초마다 회전하는 값이라,
+    화면에 뜬 걸 감지하는 지연 자체가 "이미 회전해서 틀린 코드가 되는" 위험을 키운다
+    (2026-08-05). 20분 타임아웃 동안 폴링 횟수가 늘지만 매 틱이 가벼워 부담은 없다."""
+    from gwauto import otp as otp_mod
+
+    otp_attempted = False
     start = time.monotonic()
     while time.monotonic() - start < timeout_s:
         if not _is_on_login_page(page):
             return True
+        if otp_code and not otp_attempted and otp_mod.is_otp_prompt(page):
+            otp_attempted = True
+            otp_mod.submit_otp(page, otp_code)
         page.wait_for_timeout(poll_ms)
     return False
 

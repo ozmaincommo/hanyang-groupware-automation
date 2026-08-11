@@ -25,6 +25,22 @@ CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 PORTAL_URL = login_mod.PORTAL_URL
 
 
+def _ack_new_page(page: Page) -> None:
+    """새로 열리는 탭/팝업(예: 그룹웨어 상단 메뉴 중 새 창으로 뜨는 항목들)에 대해
+    context.on("page", ...) 리스너가 존재한다는 사실 자체가 CDP의 새 타겟 auto-attach
+    처리를 완결시켜, '디버거 응답 대기' 상태로 방치되어 무한 로딩/백지 화면으로 멈추는
+    것을 막아준다는 게 Playwright의 공식 권장 안전장치다(2026-08-04, 반복해서 새 창을
+    여닫을 때 멈추는 증상 실측 후 추가). 여기서 그 페이지를 기다리거나 조작하지 않는다
+    — 안 끝나는 페이지를 기다리면(예: wait_for_load_state) 그 대기 자체가 다른 새
+    탭 처리를 지연시켜 증상을 더 악화시킬 수 있다(최초 구현에서 실제로 그렇게 짰다가
+    수정함)."""
+    del page  # 의도적으로 아무 것도 하지 않음 — 리스너가 있다는 사실만 중요
+
+
+def attach_popup_safety(context) -> None:
+    context.on("page", _ack_new_page)
+
+
 def _launch_with_cdp(p):
     try:
         return p.chromium.launch(
@@ -49,6 +65,7 @@ def start_session() -> None:
     with sync_playwright() as p:
         browser = _launch_with_cdp(p)
         context = browser.new_context(viewport={"width": 1600, "height": 900})
+        attach_popup_safety(context)
         page = context.new_page()
 
         user_id = os.environ.get("HY_GW_USER")
@@ -101,6 +118,7 @@ class AttachedSession:
             ) from e
 
         context = self.browser.contexts[0]
+        attach_popup_safety(context)
         page = next((pg for pg in context.pages if "hanyang.ac.kr" in pg.url), None)
         if page is None:
             page = context.pages[0] if context.pages else context.new_page()

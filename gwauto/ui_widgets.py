@@ -3,7 +3,21 @@
 """
 from __future__ import annotations
 
+import tkinter as tk
+
 from tkcalendar import DateEntry
+
+
+def center_over_parent(dlg: tk.Toplevel, parent: tk.Misc) -> None:
+    """다이얼로그를 부모(컨트롤패널) 창 위에 겹쳐 띄운다 — 기본 위치(화면 중앙 등)로
+    뜨면 마우스를 멀리 옮겨야 해서 불편하다는 요청(2026-08-10). 컨트롤패널이 창
+    도킹으로 옮겨 다녀도(window_dock.py) 그 시점의 실제 위치를 기준으로 잡는다."""
+    dlg.update_idletasks()
+    pw, ph = parent.winfo_width(), parent.winfo_height()
+    dw, dh = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+    x = parent.winfo_x() + max(0, (pw - dw) // 2)
+    y = parent.winfo_y() + max(0, (ph - dh) // 2)
+    dlg.geometry(f"+{x}+{y}")
 
 
 class PersistentDateEntry(DateEntry):

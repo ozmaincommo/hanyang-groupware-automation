@@ -8,27 +8,15 @@
 Screen reading/control_panel.py(교내정보 버전)와 동일한 구조 — 그룹웨어 버전.
 """
 import datetime
-import subprocess
 import tkinter as tk
-from pathlib import Path
 from tkinter import scrolledtext, ttk
 
+from gwauto import audit_log
+from gwauto import saved_login
+from gwauto.session import CDP_PORT
 from gwauto.session_worker import SessionWorker, _RELOGIN
 from gwauto.task_catalog import TASKS
-
-
-def _ensure_chromium():
-    """Chromium 미설치 시 자동 설치. 새 콘솔 창에서 진행상황 표시."""
-    ms_playwright = Path.home() / "AppData" / "Local" / "ms-playwright"
-    if ms_playwright.exists() and any(ms_playwright.glob("chromium-*")):
-        return  # 이미 설치됨
-
-    from playwright._impl._driver import compute_driver_executable
-    driver = compute_driver_executable()
-    subprocess.run(
-        [str(driver), "install", "chromium"],
-        creationflags=subprocess.CREATE_NEW_CONSOLE,
-    )
+from gwauto import window_dock
 
 
 class ControlPanel:
@@ -45,6 +33,11 @@ class ControlPanel:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        # 자동화 Chrome 창을 찾으면 이 컨트롤패널 오른쪽에 붙이고, 창을 옮기면
+        # 같이 따라오게 한다. 자동화 로직과는 무관한 순수 UX 기능이라 Chrome
+        # 창을 못 찾아도(아직 로그인 전 등) 조용히 재시도만 한다.
+        window_dock.start_dock_watcher(self.root, CDP_PORT)
+
     # --- UI 구성 ---
 
     def _build_login_section(self):
@@ -52,7 +45,7 @@ class ControlPanel:
         frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
 
         ttk.Label(frame, text="아이디").grid(row=0, column=0, sticky="w")
-        self.id_var = tk.StringVar()
+        self.id_var = tk.StringVar(value=saved_login.load_user_id())
         ttk.Entry(frame, textvariable=self.id_var, width=18).grid(row=0, column=1, padx=4)
 
         ttk.Label(frame, text="비밀번호").grid(row=0, column=2, sticky="w")
@@ -61,17 +54,25 @@ class ControlPanel:
         pw_entry.grid(row=0, column=3, padx=4)
         pw_entry.bind("<Return>", lambda e: self.on_login_click())
 
+        ttk.Label(frame, text="OTP 6자리(선택)").grid(row=0, column=4, sticky="w")
+        self.otp_var = tk.StringVar()
+        otp_entry = ttk.Entry(frame, textvariable=self.otp_var, width=8)
+        otp_entry.grid(row=0, column=5, padx=4)
+        otp_entry.bind("<Return>", lambda e: self.on_login_click())
+
         self.login_btn = ttk.Button(frame, text="로그인", command=self.on_login_click)
-        self.login_btn.grid(row=0, column=4, padx=8)
+        self.login_btn.grid(row=0, column=6, padx=8)
 
         self.login_status = ttk.Label(frame, text="로그인 필요")
-        self.login_status.grid(row=0, column=5, padx=4)
+        self.login_status.grid(row=0, column=7, padx=4)
 
         ttk.Label(
             frame,
-            text="※ 최초 로그인 시 뜨는 Chrome 창에서 구글 인증번호를 직접 입력해야 합니다.",
-            foreground="#888",
-        ).grid(row=1, column=0, columnspan=6, sticky="w", pady=(4, 0))
+            text="※ OTP 화면이 뜨는 계정은 폰에서 확인한 6자리 인증번호를 위 OTP 칸에 먼저 입력한 뒤 로그인하세요\n"
+                 "   (OTP 화면이 안 뜨는 로그인이면 이 칸은 그냥 비워두면 무시됩니다). 자동 입력이 실패하면\n"
+                 "   뜬 Chrome 창에서 직접 입력해 완료할 수 있습니다.",
+            foreground="#888", justify="left",
+        ).grid(row=1, column=0, columnspan=8, sticky="w", pady=(4, 0))
 
     def _build_task_section(self):
         frame = ttk.LabelFrame(self.root, text="등록된 작업", padding=10)
@@ -101,6 +102,31 @@ class ControlPanel:
         self.log_text = scrolledtext.ScrolledText(frame, width=95, height=14, state="disabled")
         self.log_text.grid(row=0, column=0)
 
+        ttk.Button(
+            frame, text="오늘 자동화 실행 기록 보기", command=self.on_view_audit_log
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+    def on_view_audit_log(self):
+        entries = audit_log.read_day()
+
+        win = tk.Toplevel(self.root)
+        win.title(f"자동화 실행 기록 — {datetime.date.today().isoformat()}")
+        text = scrolledtext.ScrolledText(win, width=100, height=22)
+        text.pack(padx=10, pady=10)
+
+        if not entries:
+            text.insert(tk.END, "오늘 기록된 실행이 없습니다.\n")
+        else:
+            source_label = {"gui": "컨트롤패널", "claude": "Claude"}
+            for e in entries:
+                src = source_label.get(e.get("source"), e.get("source", "?"))
+                text.insert(
+                    tk.END,
+                    f"[{e['ts']}] ({src}) {e['action']} - {e['status']}\n"
+                    f"    {e['summary']}\n\n",
+                )
+        text.configure(state="disabled")
+
     def log(self, message: str):
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_text.configure(state="normal")
@@ -119,20 +145,25 @@ class ControlPanel:
     def on_login_click(self):
         user_id = self.id_var.get()
         password = self.pw_var.get()
+        otp_code = self.otp_var.get().strip() or None
         if not user_id or not password:
             self.log("아이디/비밀번호를 입력하세요.")
             return
 
         self.login_btn.configure(state="disabled")
         self.login_status.configure(text="로그인 중...")
-        self.log("로그인 중... (ID/PW 자동 입력 후, 최초 1회는 Chrome 창에서 구글 인증번호를 직접 입력하세요)")
+        if otp_code:
+            self.log("로그인 중... (ID/PW 입력 후 OTP 화면이 뜨면 입력하신 OTP를 자동 전달합니다)")
+        else:
+            self.log("로그인 중... (OTP 화면이 뜨면 Chrome 창에서 직접 입력하세요)")
 
         def on_done(success, message):
             self.root.after(0, self._on_login_done, success, message)
 
-        self.worker.login(user_id, password, on_done)
-        self.id_var.set("")
+        self.worker.login(user_id, password, otp_code, on_done)
+        saved_login.save_user_id(user_id)  # 아이디만 기억(비밀번호는 저장 안 함) — 다음에 자동 채움
         self.pw_var.set("")
+        self.otp_var.set("")
 
     def _on_login_done(self, success: bool, message: str):
         if success:
@@ -197,5 +228,4 @@ class ControlPanel:
 
 
 if __name__ == "__main__":
-    _ensure_chromium()
     ControlPanel().mainloop()

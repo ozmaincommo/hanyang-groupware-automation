@@ -1,2 +1,4 @@
 playwright>=1.61.0
 tkcalendar>=1.6.1
+pywin32>=306
+psutil>=5.9

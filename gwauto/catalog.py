@@ -14,7 +14,9 @@ import datetime
 import json
 from pathlib import Path
 
-CATALOG_DIR = Path(__file__).parent.parent / "output" / "catalog"
+from gwauto.paths import app_dir
+
+CATALOG_DIR = app_dir() / "output" / "catalog"
 CATALOG_DIR.mkdir(parents=True, exist_ok=True)
 PROGRESS_PATH = CATALOG_DIR / "_progress.json"
 

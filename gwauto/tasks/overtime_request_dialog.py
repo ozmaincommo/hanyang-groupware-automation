@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from gwauto import form_actions
-from gwauto.ui_widgets import PersistentDateEntry as DateEntry
+from gwauto.ui_widgets import PersistentDateEntry as DateEntry, center_over_parent
 
 _DATE_ENTRY_KW = {"date_pattern": "yyyy.mm.dd", "firstweekday": "sunday", "width": 10}
 HOUR_CHOICES = [f"{h:02d}" for h in range(7, 23)]
@@ -132,5 +132,6 @@ def ask_params(parent: tk.Misc) -> dict | None:
     dlg.protocol("WM_DELETE_WINDOW", on_cancel)
     jangso_entry.focus_set()
 
+    center_over_parent(dlg, parent)
     parent.wait_window(dlg)
     return result

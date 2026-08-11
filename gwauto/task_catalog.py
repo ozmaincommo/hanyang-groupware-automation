@@ -17,6 +17,8 @@ from playwright.sync_api import Page
 
 from gwauto import navigate
 from gwauto.tasks import (
+    attendance,
+    attendance_dialog,
     overtime_request,
     overtime_request_dialog,
     vacation_request,
@@ -58,6 +60,17 @@ TASKS: list[Task] = [
         navigate_fn=partial(navigate.open_sidebar_link, label="시간외근무신청"),
         ask_params=overtime_request_dialog.ask_params,
         summarize=overtime_request.summarize,
+    ),
+    Task(
+        id="attendance",
+        name="출/퇴근처리 자동화",
+        description="서비스 바로가기 > 출/퇴근처리 > 출근시간 상태 확인 후 출/퇴근 버튼 클릭. "
+                    "이미 출근된 상태에서 '출근'을 다시 선택하면 중복 방지를 위해 중단하고, "
+                    "'퇴근'인데 출근 기록이 없으면 자동으로 두 번 클릭해 출근+퇴근을 모두 기록.",
+        handler=attendance.run,
+        navigate_fn=navigate.open_attendance,
+        ask_params=attendance_dialog.ask_params,
+        summarize=attendance.summarize,
     ),
 ]
 

@@ -31,6 +31,11 @@ def check_and_dismiss(page: Page, timeout_ms: int = 2000) -> str | None:
     except Exception:
         return None
 
+    # 버튼을 찾는 것과 클릭하는 것을 한 evaluate 안에서 같이 한다 — Python 쪽에서
+    # page.get_by_text("확인")로 다시 찾으면 페이지 전체에서 스코프 없이 첫 매치를
+    # 집어, 모달 뒤에 가려진 "확인" 라벨의 다른 버튼(예: OTP 화면의 #btn_otp_confirm
+    # 자체 value가 "확인")을 잘못 클릭해 타임아웃 나는 버그가 있었다(2026-08-04
+    # 실측). 모달 안에서 찾은 버튼을 그 자리에서 바로 클릭해 스코프를 보장한다.
     info = page.evaluate(
         """
         (titleText) => {
@@ -42,7 +47,11 @@ def check_and_dismiss(page: Page, timeout_ms: int = 2000) -> str | None:
             for (let i = 0; i < 10 && modal; i++) {
                 const btns = [...modal.querySelectorAll('a,button,input[type=button]')]
                     .filter(b => (b.innerText || b.value || '').trim() === '확인');
-                if (btns.length) return modal.innerText;
+                if (btns.length) {
+                    const bodyText = modal.innerText;
+                    btns[0].click();
+                    return bodyText;
+                }
                 modal = modal.parentElement;
             }
             return null;
@@ -56,11 +65,10 @@ def check_and_dismiss(page: Page, timeout_ms: int = 2000) -> str | None:
         # innerText에는 제목/본문/버튼 라벨이 줄바꿈으로 섞여 있다 — 제목과 '확인'
         # 줄을 걷어내고 본문만 남긴다.
         lines = [ln.strip() for ln in info.splitlines() if ln.strip()]
-        lines = [ln for ln in lines if ln not in (TITLE_TEXT, "확인")]
+        # "close"는 우측 상단 × 아이콘의 접근성 라벨 텍스트(2026-08-04 실측, OTP
+        # 화면 사례) — 제목/확인 버튼과 마찬가지로 본문이 아니라 걷어낸다.
+        lines = [ln for ln in lines if ln not in (TITLE_TEXT, "확인", "close")]
         body_text = "\n".join(lines) if lines else info.strip()
 
-    confirm = page.get_by_text("확인", exact=True)
-    if confirm.count() > 0:
-        confirm.first.click()
     page.wait_for_timeout(500)
     return body_text

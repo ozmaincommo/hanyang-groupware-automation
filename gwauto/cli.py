@@ -75,6 +75,18 @@ def _load_shortcut_entries() -> dict:
     return json.loads(entries_path.read_text(encoding="utf-8"))
 
 
+def _fetch_identity_values(page) -> list:
+    """휴가신청 화면(거의 항상 cbNameSh/cbGaeinNoSh/strSosokInfo를 가짐)에 한 번
+    들어가서 성명/개인번호/소속 값을 모아온다. 이 값 목록을 여러 메뉴 리컨에
+    공통으로 넘겨써야 각 메뉴 화면에 그 id 필드가 없어도(예: 자산수리요청) 같은
+    값이 다른 필드명으로 노출된 부분까지 마스킹할 수 있다(recon.py 참고)."""
+    from gwauto import navigate
+    from gwauto.recon import collect_identity_values
+
+    navigate.open_shortcut(page, "휴가신청")
+    return collect_identity_values(page)
+
+
 def cmd_recon(args) -> None:
     from gwauto.recon import recon_menu
     from gwauto.session import AttachedSession
@@ -89,7 +101,8 @@ def cmd_recon(args) -> None:
         return
 
     with AttachedSession() as session:
-        result = recon_menu(session.page, item)
+        identity_values = _fetch_identity_values(session.page)
+        result = recon_menu(session.page, item, identity_values=identity_values)
 
     catalog.write_entry(item["itemId"], result)
     catalog.mark(item["itemId"], "recon_done")
@@ -109,10 +122,11 @@ def cmd_recon_all(_args) -> None:
 
     print(f"pending {len(ids)}건을 순서대로 리컨합니다: {ids}")
     with AttachedSession() as session:
+        identity_values = _fetch_identity_values(session.page)
         for item_id in ids:
             item = entries[item_id]
             try:
-                result = recon_menu(session.page, item)
+                result = recon_menu(session.page, item, identity_values=identity_values)
                 catalog.write_entry(item_id, result)
                 catalog.mark(item_id, "recon_done")
                 print(f"  완료: {item_id} {item['label']} 컴포넌트 {result['componentCount']}건")
