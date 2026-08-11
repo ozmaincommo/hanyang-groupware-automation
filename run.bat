@@ -21,13 +21,22 @@ echo.
 goto run
 
 :run
-python control_panel.py
-if errorlevel 1 (
-    echo.
-    echo Something went wrong. See the messages above.
-    pause
-)
-goto :eof
+del /f /q error.log >nul 2>nul
+start "" /min cmd /c "pythonw control_panel.py > error.log 2>&1"
+timeout /t 3 /nobreak >nul
+
+for %%A in (error.log) do set errsize=%%~zA
+if not "%errsize%"=="0" goto crashed
+del /f /q error.log >nul 2>nul
+exit
+
+:crashed
+echo Something went wrong starting the program. Details below
+echo (also saved to error.log in this folder):
+echo.
+type error.log
+pause
+exit /b 1
 
 :nopython
 echo Python not found.
