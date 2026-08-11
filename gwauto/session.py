@@ -41,6 +41,29 @@ def attach_popup_safety(context) -> None:
     context.on("page", _ack_new_page)
 
 
+def normalize_viewport(page: Page, width: int = 1600, height: int = 900) -> None:
+    """실제 창 크기/모니터 DPI 배율과 무관하게 페이지가 항상 같은 CSS 뷰포트로
+    렌더링되도록 강제한다(2026-08-11, 다른 PC에서 겪은 문제 이후 추가) — 실측
+    검증: 창이 실제로 800x600이어도 페이지 안에서는 1600x900으로 렌더링됨.
+
+    Playwright의 page.set_viewport_size()는 헤드풀(진짜 창이 있는) 브라우저에서는
+    실제 OS 창 크기 자체를 바꾸려 드는데, 그러면 window_dock.py가 계속 창을
+    도킹 위치에 맞게 리사이즈하는 것과 서로 되돌리며 충돌한다. 그래서 CDP의
+    Emulation.setDeviceMetricsOverride를 직접 써서 창 크기는 그대로 두고
+    렌더링(뷰포트)만 고정한다. 실패해도 자동화 자체는 계속 진행되도록 조용히
+    넘어간다 — 이건 신뢰성을 높이는 부가 기능이지 필수 경로가 아니다."""
+    try:
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Emulation.setDeviceMetricsOverride", {
+            "width": width,
+            "height": height,
+            "deviceScaleFactor": 1,
+            "mobile": False,
+        })
+    except Exception:
+        pass
+
+
 def _launch_with_cdp(p):
     try:
         return p.chromium.launch(
@@ -67,6 +90,7 @@ def start_session() -> None:
         context = browser.new_context(viewport={"width": 1600, "height": 900})
         attach_popup_safety(context)
         page = context.new_page()
+        normalize_viewport(page)
 
         user_id = os.environ.get("HY_GW_USER")
         password = os.environ.get("HY_GW_PASS")
@@ -122,6 +146,7 @@ class AttachedSession:
         page = next((pg for pg in context.pages if "hanyang.ac.kr" in pg.url), None)
         if page is None:
             page = context.pages[0] if context.pages else context.new_page()
+        normalize_viewport(page)
         self.page = page
         return self
 
