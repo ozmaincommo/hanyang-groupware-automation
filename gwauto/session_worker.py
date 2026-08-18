@@ -20,6 +20,7 @@ Screen reading/hy_portal/session_worker.py와 유사하지만, 그룹웨어 버�
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
 import tempfile
@@ -138,6 +139,19 @@ class SessionWorker(threading.Thread):
 
     def _handle_login(self, payload) -> None:
         user_id, password, otp_code, on_done = payload
+        # 아이디/비밀번호를 안 넘겼으면(예: 사용자님 요청 2026-08-11 — 채팅에 직접
+        # 입력하는 대신, 로컬 환경변수에서만 읽어 쓰는 안전한 방식) 로컬 환경변수로
+        # 폴백한다. 값 자체는 여기서만 잠깐 머물다 아래 del로 즉시 지워진다 — 어느
+        # 경로로 왔든 채팅/로그에는 절대 남기지 않는다.
+        user_id = user_id or os.environ.get("HY_GW_USER", "")
+        password = password or os.environ.get("HY_GW_PASS", "")
+        if not user_id or not password:
+            on_done(
+                False,
+                "아이디/비밀번호가 없습니다. 직접 입력하거나, 로컬 환경변수 "
+                "HY_GW_USER / HY_GW_PASS를 설정해두세요.",
+            )
+            return
         try:
             with AttachedSession() as s:
                 page = s.page
@@ -192,7 +206,9 @@ class SessionWorker(threading.Thread):
 
     # --- 외부(UI 스레드)에서 호출하는 API ---
 
-    def login(self, user_id: str, password: str, otp_code: str | None, on_done) -> None:
+    def login(self, user_id: str | None, password: str | None, otp_code: str | None, on_done) -> None:
+        """user_id/password를 비워두면(None 또는 "") 로컬 환경변수
+        HY_GW_USER/HY_GW_PASS로 폴백한다(_handle_login 참고)."""
         self._requests.put(("login", (user_id, password, otp_code, on_done)))
 
     def run_task(self, task, params, on_done) -> None:

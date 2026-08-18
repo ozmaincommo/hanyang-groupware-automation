@@ -146,13 +146,14 @@ class ControlPanel:
         user_id = self.id_var.get()
         password = self.pw_var.get()
         otp_code = self.otp_var.get().strip() or None
-        if not user_id or not password:
-            self.log("아이디/비밀번호를 입력하세요.")
-            return
+        # 아이디/비밀번호 칸을 비워두면 워커가 로컬 환경변수(HY_GW_USER/HY_GW_PASS)로
+        # 폴백을 시도한다 — 여기서 막지 않고 그대로 넘긴다(2026-08-11).
 
         self.login_btn.configure(state="disabled")
         self.login_status.configure(text="로그인 중...")
-        if otp_code:
+        if not user_id or not password:
+            self.log("로그인 중... (아이디/비밀번호가 비어 있어 로컬 환경변수로 시도합니다)")
+        elif otp_code:
             self.log("로그인 중... (ID/PW 입력 후 OTP 화면이 뜨면 입력하신 OTP를 자동 전달합니다)")
         else:
             self.log("로그인 중... (OTP 화면이 뜨면 Chrome 창에서 직접 입력하세요)")
