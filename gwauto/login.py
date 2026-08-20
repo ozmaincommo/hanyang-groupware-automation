@@ -56,13 +56,24 @@ def fill_credentials(page: Page, user_id: str, password: str) -> None:
 
 
 def wait_until_logged_in(
-    page: Page, timeout_s: int = 600, poll_ms: int = 300, otp_code: str | None = None
+    page: Page,
+    timeout_s: int = 600,
+    poll_ms: int = 300,
+    otp_code: str | None = None,
+    email_otp: bool = False,
+    user_id: str | None = None,
+    password: str | None = None,
 ) -> bool:
-    """로그인 폼(및 뒤이은 구글 OTP 입력)이 화면에서 사라질 때까지 대기한다.
-    otp_code가 주어지면 OTP 화면이 뜨는 순간 한 번만 자동 입력을 시도한다(otp.py) —
-    실패해도 재시도하지 않고 예외를 그대로 위로 던져(호출 측이 실패 사유를 그대로
-    보고하도록) 사용자가 뜬 Chrome 창에서 직접 정정 입력할 수 있게 남겨둔다.
-    otp_code가 없으면 기존처럼 사용자가 직접 입력할 때까지 대기만 한다.
+    """로그인 폼(및 뒤이은 OTP 입력)이 화면에서 사라질 때까지 대기한다.
+
+    - otp_code가 주어지면 OTP 화면이 뜨는 순간 한 번만 자동 입력을 시도한다(otp.py) —
+      실패해도 재시도하지 않고 예외를 그대로 위로 던져(호출 측이 실패 사유를 그대로
+      보고하도록) 사용자가 뜬 Chrome 창에서 직접 정정 입력할 수 있게 남겨둔다.
+    - email_otp=True면(사용자가 명시적으로 켰을 때만) otp_code 대신 Email 인증번호
+      방식을 전량 자동화한다(email_otp.py) — Gmail 로그인부터 코드 추출/입력까지
+      사람 개입 없이 끝낸다. user_id/password가 이 경로에도 그대로 필요하다
+      (그룹웨어와 이메일 계정 로그인 정보가 동일하다는 전제, 2026-08-11).
+    - 둘 다 없으면 기존처럼 사용자가 직접 입력할 때까지 대기만 한다.
 
     poll_ms 기본값을 300ms로 낮췄다(기존 1000ms) — OTP는 30초마다 회전하는 값이라,
     화면에 뜬 걸 감지하는 지연 자체가 "이미 회전해서 틀린 코드가 되는" 위험을 키운다
@@ -74,9 +85,15 @@ def wait_until_logged_in(
     while time.monotonic() - start < timeout_s:
         if not _is_on_login_page(page):
             return True
-        if otp_code and not otp_attempted and otp_mod.is_otp_prompt(page):
-            otp_attempted = True
-            otp_mod.submit_otp(page, otp_code)
+        if not otp_attempted and otp_mod.is_otp_prompt(page):
+            if email_otp and user_id and password:
+                from gwauto import email_otp as email_otp_mod
+
+                otp_attempted = True
+                email_otp_mod.auto_login_via_email(page, user_id, password)
+            elif otp_code:
+                otp_attempted = True
+                otp_mod.submit_otp(page, otp_code)
         page.wait_for_timeout(poll_ms)
     return False
 

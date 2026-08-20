@@ -32,6 +32,7 @@ import winreg
 from pathlib import Path
 
 from gwauto import audit_log
+from gwauto import email_otp as email_otp_mod
 from gwauto import login as login_mod
 from gwauto import otp as otp_mod
 from gwauto.paths import app_dir
@@ -138,7 +139,7 @@ class SessionWorker(threading.Thread):
             proc.terminate()
 
     def _handle_login(self, payload) -> None:
-        user_id, password, otp_code, on_done = payload
+        user_id, password, otp_code, email_otp, on_done = payload
         # 아이디/비밀번호를 안 넘겼으면(예: 사용자님 요청 2026-08-11 — 채팅에 직접
         # 입력하는 대신, 로컬 환경변수에서만 읽어 쓰는 안전한 방식) 로컬 환경변수로
         # 폴백한다. 값 자체는 여기서만 잠깐 머물다 아래 del로 즉시 지워진다 — 어느
@@ -157,13 +158,21 @@ class SessionWorker(threading.Thread):
                 page = s.page
                 login_mod.goto_login(page)
                 login_mod.fill_credentials(page, user_id, password)
-                del user_id, password  # 더 이상 메모리에 보관하지 않음
-                # 최초 로그인이면 여기서 구글 OTP 화면이 뜬다. otp_code가 주어졌으면
-                # otp.py가 한 번만 자동 입력을 시도하고, 아니면(또는 실패하면) 사용자가
-                # 뜬 Chrome 창에서 직접 입력할 때까지 최대 20분 폴링. 이 구간은 사용자가
-                # 메뉴를 반복 클릭할 상황이 아니므로 하나의 연결로 유지해도 안전하다.
-                ok = login_mod.wait_until_logged_in(page, timeout_s=1200, otp_code=otp_code)
-                del otp_code
+                # 최초 로그인이면 여기서 OTP 화면이 뜬다. otp_code가 주어졌으면
+                # otp.py가 한 번만 자동 입력을 시도하고, email_otp가 켜져 있으면
+                # (user_id/password가 이 경로에도 그대로 필요) Email 인증번호 방식을
+                # 전량 자동화한다(email_otp.py) — 아니면 사용자가 뜬 Chrome 창에서
+                # 직접 입력할 때까지 최대 20분 폴링. 이 구간은 사용자가 메뉴를 반복
+                # 클릭할 상황이 아니므로 하나의 연결로 유지해도 안전하다.
+                ok = login_mod.wait_until_logged_in(
+                    page,
+                    timeout_s=1200,
+                    otp_code=otp_code,
+                    email_otp=email_otp,
+                    user_id=user_id,
+                    password=password,
+                )
+                del user_id, password, otp_code  # 더 이상 메모리에 보관하지 않음
             # with 블록을 벗어나며 Playwright 연결은 자동으로 끊긴다 — 이후 사용자의
             # 수동 사용 시간은 Playwright 미연결 상태(실측 검증된 정상 상태)가 된다.
             if ok:
@@ -176,6 +185,8 @@ class SessionWorker(threading.Thread):
             if warning:
                 message = f"{message}\n{warning}"
             on_done(False, message)
+        except email_otp_mod.EmailOtpError as e:
+            on_done(False, f"이메일 자동 인증 실패: {e}")
         except Exception as e:
             on_done(False, str(e))
 
@@ -206,10 +217,19 @@ class SessionWorker(threading.Thread):
 
     # --- 외부(UI 스레드)에서 호출하는 API ---
 
-    def login(self, user_id: str | None, password: str | None, otp_code: str | None, on_done) -> None:
+    def login(
+        self,
+        user_id: str | None,
+        password: str | None,
+        otp_code: str | None,
+        on_done,
+        email_otp: bool = False,
+    ) -> None:
         """user_id/password를 비워두면(None 또는 "") 로컬 환경변수
-        HY_GW_USER/HY_GW_PASS로 폴백한다(_handle_login 참고)."""
-        self._requests.put(("login", (user_id, password, otp_code, on_done)))
+        HY_GW_USER/HY_GW_PASS로 폴백한다(_handle_login 참고). email_otp=True면
+        otp_code 대신 Email 인증번호 자동화(email_otp.py)를 사용한다 — 사용자가
+        명시적으로 위험을 감수하고 켰을 때만 True로 넘겨야 한다."""
+        self._requests.put(("login", (user_id, password, otp_code, email_otp, on_done)))
 
     def run_task(self, task, params, on_done) -> None:
         self._requests.put(("run_task", (task, params, on_done)))

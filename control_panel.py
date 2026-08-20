@@ -66,13 +66,24 @@ class ControlPanel:
         self.login_status = ttk.Label(frame, text="로그인 필요")
         self.login_status.grid(row=0, column=7, padx=4)
 
+        # 이메일 인증번호 자동화(2026-08-20) — 켜면 OTP 칸 입력을 무시하고, 이메일
+        # 계정(그룹웨어와 로그인 정보 동일)에 직접 로그인해 인증 메일을 읽어 자동
+        # 입력한다. 위험을 감수하고 명시적으로 요청한 기능이므로 기본값은 꺼짐.
+        self.email_otp_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame, text="이메일 자동 인증(위험 감수)", variable=self.email_otp_var,
+        ).grid(row=0, column=8, padx=8)
+
         ttk.Label(
             frame,
             text="※ OTP 화면이 뜨는 계정은 폰에서 확인한 6자리 인증번호를 위 OTP 칸에 먼저 입력한 뒤 로그인하세요\n"
                  "   (OTP 화면이 안 뜨는 로그인이면 이 칸은 그냥 비워두면 무시됩니다). 자동 입력이 실패하면\n"
-                 "   뜬 Chrome 창에서 직접 입력해 완료할 수 있습니다.",
+                 "   뜬 Chrome 창에서 직접 입력해 완료할 수 있습니다.\n"
+                 "※ '이메일 자동 인증'을 켜면 위 OTP 칸은 무시되고, 컨트롤패널이 이메일 계정에 직접 로그인해\n"
+                 "   인증 메일을 읽어 자동 입력합니다 — 이메일 계정 비밀번호가 그룹웨어와 동일하다는 전제이며,\n"
+                 "   2차 인증의 보안 이점이 줄어드는 것을 감수하고 켜는 옵션입니다.",
             foreground="#888", justify="left",
-        ).grid(row=1, column=0, columnspan=8, sticky="w", pady=(4, 0))
+        ).grid(row=1, column=0, columnspan=9, sticky="w", pady=(4, 0))
 
     def _build_task_section(self):
         frame = ttk.LabelFrame(self.root, text="등록된 작업", padding=10)
@@ -146,6 +157,7 @@ class ControlPanel:
         user_id = self.id_var.get()
         password = self.pw_var.get()
         otp_code = self.otp_var.get().strip() or None
+        email_otp = self.email_otp_var.get()
         # 아이디/비밀번호 칸을 비워두면 워커가 로컬 환경변수(HY_GW_USER/HY_GW_PASS)로
         # 폴백을 시도한다 — 여기서 막지 않고 그대로 넘긴다(2026-08-11).
 
@@ -153,6 +165,8 @@ class ControlPanel:
         self.login_status.configure(text="로그인 중...")
         if not user_id or not password:
             self.log("로그인 중... (아이디/비밀번호가 비어 있어 로컬 환경변수로 시도합니다)")
+        if email_otp:
+            self.log("로그인 중... (OTP 화면이 뜨면 이메일 계정을 자동으로 확인해 인증번호를 입력합니다)")
         elif otp_code:
             self.log("로그인 중... (ID/PW 입력 후 OTP 화면이 뜨면 입력하신 OTP를 자동 전달합니다)")
         else:
@@ -161,7 +175,7 @@ class ControlPanel:
         def on_done(success, message):
             self.root.after(0, self._on_login_done, success, message)
 
-        self.worker.login(user_id, password, otp_code, on_done)
+        self.worker.login(user_id, password, otp_code, on_done, email_otp=email_otp)
         saved_login.save_user_id(user_id)  # 아이디만 기억(비밀번호는 저장 안 함) — 다음에 자동 채움
         self.pw_var.set("")
         self.otp_var.set("")
