@@ -19,6 +19,8 @@ DOM 구조(2026-08-11/2026-08-20, 실측):
 """
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from playwright.sync_api import Page
 
 GMAIL_URL = "https://mail.google.com/mail/u/0/"
@@ -34,7 +36,8 @@ def _full_email(user_id: str) -> str:
 
 
 def is_logged_in(page: Page) -> bool:
-    return "mail.google.com/mail" in page.url
+    parsed = urlparse(page.url)
+    return parsed.netloc == "mail.google.com" and parsed.path.startswith("/mail")
 
 
 def goto_gmail(page: Page) -> None:
@@ -44,17 +47,33 @@ def goto_gmail(page: Page) -> None:
 def login(page: Page, user_id: str, password: str, timeout_s: int = 30) -> None:
     """이미 로그인돼 있으면 아무 것도 하지 않는다. 아니면 구글 로그인 폼을 채워
     제출하고, mail.google.com/mail 받은편지함 도달까지 대기한다(관리형 프로필
-    안내 화면은 자동으로 지나가므로 별도 처리 없이 최종 URL만 기다리면 된다)."""
+    안내 화면은 자동으로 지나가므로 별도 처리 없이 최종 URL만 기다리면 된다).
+
+    click() 후 press_sequentially()로 한 글자씩 입력한다(2026-08-21, 다른 PC
+    실측) — 구글 로그인 폼은 실제 키 입력 이벤트를 기대하는 자체 검증 로직이 있어
+    fill()의 합성 이벤트만으로는 "다음" 버튼이 비활성 상태로 남는 경우가 있었다."""
     goto_gmail(page)
     if is_logged_in(page):
         return
 
-    page.fill(IDENTIFIER_SELECTOR, _full_email(user_id))
-    page.click(NEXT_BUTTON_SELECTOR)
+    id_locator = page.locator(IDENTIFIER_SELECTOR)
+    id_locator.wait_for(state="visible", timeout=timeout_s * 1000)
+    id_locator.click()
+    page.wait_for_timeout(300)
+    id_locator.press_sequentially(_full_email(user_id), delay=30)
+
+    next_btn = page.locator(NEXT_BUTTON_SELECTOR)
+    next_btn.wait_for(state="visible", timeout=10000)
+    next_btn.click()
 
     pw_locator = page.locator(PASSWORD_SELECTOR)
     pw_locator.first.wait_for(state="visible", timeout=timeout_s * 1000)
-    pw_locator.first.fill(password)
-    page.click(NEXT_BUTTON_SELECTOR)
+    pw_locator.first.click()
+    page.wait_for_timeout(300)
+    pw_locator.first.press_sequentially(password, delay=30)
+
+    next_btn2 = page.locator(NEXT_BUTTON_SELECTOR)
+    next_btn2.wait_for(state="visible", timeout=10000)
+    next_btn2.click()
 
     page.wait_for_url("**mail.google.com/mail**", timeout=timeout_s * 1000)

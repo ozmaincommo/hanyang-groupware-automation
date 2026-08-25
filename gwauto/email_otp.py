@@ -19,17 +19,37 @@ DOM 구조(2026-08-20, 실측, output/_authdiv_html.json 근거로 확인 후 �
   가로채서 안 닫으면 클릭이 타임아웃난다, 실측 확인).
 - 인증 메일: 발신자 portal@umail.hanyang.ac.kr, 제목 "[포털 한양인] 2차 인증 본인
   확인 메일", 본문에 "...인증번호(Authentication Number)는 [숫자6자리] 입니다."
-  패턴으로 코드가 들어있다. Gmail 받은편지함은 최신순 정렬이라 발송 직후 가장 위
-  행(tr.zA)이 새 메일이 된다 — 실측 결과 Gmail 검색창을 URL 해시로 직접 조작하는
-  방식은(#search/... 로 goto) SPA 라우터가 반응하지 않아 신뢰할 수 없었으므로,
-  검색 대신 받은편지함 최상단 행을 폴링하는 방식을 쓴다.
+  패턴으로 코드가 들어있다.
+
+메일 찾는 방식(2026-08-21, 실측 후 여러 번 수정):
+1) 처음엔 받은편지함 최상단 행을 폴링하는 방식을 썼으나, 이 계정은 Gmail의
+   "중요도 우선" 정렬을 쓰고 있어(실측: 검색 결과 상단에 "Google 매직에 따르면
+   중요한 메일입니다"로 표시된 오래된 메일들이 계속 잡힘) 새 메일이 항상
+   최상단에 오지 않는다.
+2) 교내정보 자동화 hy_portal/email_otp.py를 참고해 `from:{발신자}` 검색 결과의
+   "행 개수"를 발송 전/후로 비교하는 방식(count_auth_rows/fetch_code_from_gmail)
+   으로 바꿨다 — 정렬 순서에 의존하지 않아 안정적이다.
+3) 그런데 이미 열려 있는 Gmail 탭에서 `#search/...` 해시로 goto()하거나(SPA
+   내부 네비게이션), 검색창 값을 URL로 채운 뒤 Enter/검색 버튼을 눌러도, 검색이
+   "제출"되지 않고 검색창에 값만 남아 기본 받은편지함이 그대로 보이는 문제가
+   있었다(실측: 검색 버튼이 aria-disabled="true" 상태로 남음 — 값이 실제 키
+   입력 이벤트 없이 채워져서 구글 로그인 폼과 같은 유형의 문제). **새 탭을 열어
+   그 탭의 첫 내비게이션으로 검색 URL에 콜드 로드(wait_until="load")하면
+   문제없이 필터링된 결과가 반영된다** — 그래서 매 조회마다 새 탭을 열고 검색
+   후 바로 닫는 방식(`_cold_search`)을 쓴다. 로그인 쿠키는 컨텍스트 단위로
+   공유되므로 gmail_login.login()을 한 번만 거치면 이후 새 탭들은 이미 로그인된
+   상태로 뜬다.
+4) `newer_than:5m`은 Gmail 검색 연산자 특성상 "5분"이 아니라 "5개월"로 해석된다
+   (d/m/y만 지원, 분 단위 없음) — 그래도 행 개수 델타 비교로 새 메일 여부를
+   판단하므로 동작에는 문제가 없었지만, 오해 소지가 있어 `newer_than:1d`로
+   정정했다.
 """
 from __future__ import annotations
 
-import re
 import time
+import urllib.parse
 
-from playwright.sync_api import Page
+from playwright.sync_api import BrowserContext, Page
 
 from gwauto import gmail_login, system_message
 
@@ -40,10 +60,20 @@ EMAIL_CONFIRM_BUTTON_SELECTOR = "#btn_email_confirm"
 
 MAIL_SENDER_MARKER = "portal@umail.hanyang.ac.kr"
 MAIL_SUBJECT_MARKER = "2차 인증"
-_CODE_RE = re.compile(r"\[(\d{6})\]")
 
-_TOP_ROW_SELECTOR = "tr.zA"
-_MAIL_BODY_SELECTOR = "div.a3s"
+_ROW_SELECTOR = "tr.zA"
+_GMAIL_SEARCH_BASE = "https://mail.google.com/mail/u/0/#search/"
+_SEARCH_QUERY = f"from:{MAIL_SENDER_MARKER} newer_than:1d"
+
+_EXTRACT_LAST_CODE_JS = r"""() => {
+    const els = document.querySelectorAll('div.a3s');
+    const codes = [];
+    for (const el of els) {
+        const m = el.innerText.match(/\[(\d{6})\]/);
+        if (m) codes.push(m[1]);
+    }
+    return codes.length ? codes[codes.length - 1] : null;
+}"""
 
 
 class EmailOtpError(Exception):
@@ -60,60 +90,60 @@ def request_email_code(page: Page, timeout_s: int = 15) -> None:
     system_message.check_and_dismiss(page, timeout_ms=timeout_s * 1000)
 
 
-def top_row_snapshot(gmail_page: Page) -> str | None:
-    """받은편지함 최상단 행의 텍스트를 반환한다(없으면 None). 새 인증 메일이
-    도착했는지 판단할 때, 이전에 이미 같은 제목으로 와 있던 오래된(만료된) 메일을
-    새 메일로 착각하지 않도록 발송 전 기준선을 잡아두는 용도다."""
-    return gmail_page.evaluate(
-        f"""
-        () => {{
-          const row = document.querySelector({_TOP_ROW_SELECTOR!r});
-          return row ? row.innerText : null;
-        }}
-        """
-    )
+def _cold_search(context: BrowserContext) -> Page:
+    """새 탭을 열어 그 탭의 첫 내비게이션으로 검색 URL에 콜드 로드한다. 이미 열린
+    탭에서 검색 URL로 goto()하면 검색창에 값만 채워지고 실제 검색은 제출되지
+    않는 문제가 있어(모듈 docstring 참고, 실측 확인) 매번 새 탭을 쓴다. 로그인
+    쿠키는 컨텍스트 단위로 공유되므로 새 탭도 이미 로그인된 상태로 뜬다."""
+    search_url = _GMAIL_SEARCH_BASE + urllib.parse.quote(_SEARCH_QUERY)
+    page = context.new_page()
+    page.goto(search_url, wait_until="load", timeout=25000)
+    page.wait_for_timeout(2000)
+    return page
 
 
-def fetch_code_from_gmail(
-    gmail_page: Page, timeout_s: int = 60, baseline_top_row: str | None = None
-) -> str:
-    """받은편지함 최상단 행을 폴링해 인증 메일이 도착하면 열어 본문에서 6자리
-    코드를 뽑아 반환한다. baseline_top_row가 주어지면(발송 전 top_row_snapshot
-    결과) 그 내용과 동일한 행은 무시한다 — 과거에 이미 와 있던 같은 제목의 만료된
-    인증 메일을 새 메일로 착각해 틀린 코드를 읽는 것을 막기 위함이다. timeout_s
-    안에 (새 메일을) 못 찾으면 EmailOtpError."""
-    gmail_page.bring_to_front()
+def count_auth_rows(context: BrowserContext) -> int:
+    """발신자 기준 검색 결과에서 인증 메일 행 수를 반환한다(발송 전 기준선용)."""
+    page = _cold_search(context)
+    try:
+        return page.locator(_ROW_SELECTOR).filter(has_text=MAIL_SUBJECT_MARKER).count()
+    except Exception:
+        return 0
+    finally:
+        page.close()
+
+
+def fetch_code_from_gmail(context: BrowserContext, timeout_s: int = 60, pre_row_count: int = 0) -> str:
+    """발송 전 count_auth_rows()로 잰 기준선(pre_row_count)보다 검색 결과 행 수가
+    늘어나면 새 메일이 도착한 것으로 보고 열어 코드를 추출한다. 받은편지함 정렬
+    순서(이 계정은 중요도 우선 정렬이라 새 메일이 항상 최상단에 오지 않음, 실측)에
+    의존하지 않아 안정적이다. timeout_s 안에 못 찾으면 EmailOtpError."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        top_row_text = top_row_snapshot(gmail_page)
-        if (
-            top_row_text
-            and MAIL_SUBJECT_MARKER in top_row_text
-            and top_row_text != baseline_top_row
-        ):
-            break
-        gmail_page.wait_for_timeout(3000)
-        gmail_page.reload(wait_until="domcontentloaded")
-        gmail_page.wait_for_timeout(1500)
-    else:
-        raise EmailOtpError(f"{timeout_s}초 안에 새 인증 메일이 도착하지 않았습니다.")
+        page = _cold_search(context)
+        try:
+            rows = page.locator(_ROW_SELECTOR).filter(has_text=MAIL_SUBJECT_MARKER)
+            if rows.count() > pre_row_count:
+                rows.first.click(timeout=8000)
+                page.wait_for_timeout(1500)
+                sender_ok = page.evaluate(
+                    "() => Array.from(document.querySelectorAll('span.gD'))"
+                    f".some(el => el.getAttribute('email') === {MAIL_SENDER_MARKER!r})"
+                )
+                if not sender_ok:
+                    raise EmailOtpError(f"인증 메일 발신자가 예상과 다릅니다(기대: {MAIL_SENDER_MARKER}).")
+                code = page.evaluate(_EXTRACT_LAST_CODE_JS)
+                if code:
+                    return code
+        except EmailOtpError:
+            raise
+        except Exception:
+            pass
+        finally:
+            page.close()
+        time.sleep(3)
 
-    gmail_page.locator(_TOP_ROW_SELECTOR).first.click(timeout=8000)
-    gmail_page.wait_for_timeout(1000)
-
-    sender = gmail_page.evaluate(
-        "() => { const el = document.querySelector('span.gD'); return el ? el.getAttribute('email') : null; }"
-    )
-    body = gmail_page.evaluate(
-        f"() => {{ const el = document.querySelector({_MAIL_BODY_SELECTOR!r}); return el ? el.innerText : null; }}"
-    )
-    if sender != MAIL_SENDER_MARKER or not body:
-        raise EmailOtpError(f"인증 메일 형식이 예상과 다릅니다(발신자: {sender}).")
-
-    m = _CODE_RE.search(body)
-    if not m:
-        raise EmailOtpError("메일 본문에서 6자리 인증번호를 찾지 못했습니다.")
-    return m.group(1)
+    raise EmailOtpError(f"{timeout_s}초 안에 새 인증 메일을 찾지 못했습니다.")
 
 
 def submit_email_code(page: Page, code: str, timeout_s: int = 15) -> None:
@@ -156,16 +186,19 @@ def auto_login_via_email(
     portal_page: Page, user_id: str, password: str, timeout_s: int = 90
 ) -> None:
     """OTP 화면이 뜬 portal_page를 대상으로, Email 인증번호 전 과정을 사람 개입 없이
-    끝까지 수행한다: Gmail 로그인(gmail_login) -> 인증번호발송 -> 받은편지함에서
-    코드 추출 -> 그룹웨어 OTP 화면에 입력/확인. portal_page.context에 새 탭을 열어
-    쓰고, 끝나면 그 탭을 닫는다(사용자가 그룹웨어 화면만 보게 남겨둔다)."""
+    끝까지 수행한다: Gmail 로그인(gmail_login) -> 인증번호발송 -> 검색 결과에서
+    코드 추출 -> 그룹웨어 OTP 화면에 입력/확인. Gmail 로그인은 새 탭을 열어 한 번만
+    거치고 바로 닫는다 — 이후 검색은 count_auth_rows/fetch_code_from_gmail이 매번
+    새 탭을 열어 처리하며, 로그인 쿠키는 컨텍스트 단위로 공유되므로 재로그인이
+    필요 없다."""
     context = portal_page.context
-    gmail_page = context.new_page()
+    login_page = context.new_page()
     try:
-        gmail_login.login(gmail_page, user_id, password, timeout_s=timeout_s)
-        baseline = top_row_snapshot(gmail_page)
-        request_email_code(portal_page)
-        code = fetch_code_from_gmail(gmail_page, timeout_s=timeout_s, baseline_top_row=baseline)
-        submit_email_code(portal_page, code)
+        gmail_login.login(login_page, user_id, password, timeout_s=timeout_s)
     finally:
-        gmail_page.close()
+        login_page.close()
+
+    pre_row_count = count_auth_rows(context)
+    request_email_code(portal_page)
+    code = fetch_code_from_gmail(context, timeout_s=timeout_s, pre_row_count=pre_row_count)
+    submit_email_code(portal_page, code)
